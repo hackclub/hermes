@@ -158,34 +158,34 @@ The `rubber_stamps` field specifies what items should be packed in the envelope.
 ### Lettermail (up to 30g)
 | Destination | Cost |
 |-------------|------|
-| Canada | $1.19 USD |
-| United States | $1.45 USD |
-| International | $3.02 USD |
+| Canada | $1.75 USD |
+| United States | $2.00 USD |
+| International | $3.50 USD |
 
 ### Bubble Packet (up to 500g)
 
 **Canada:**
 | Weight | Cost |
 |--------|------|
-| ≤100g | $2.16 |
-| ≤200g | $3.56 |
-| ≤300g | $4.96 |
-| ≤400g | $5.67 |
-| ≤500g | $6.10 |
+| ≤100g | $3.11 |
+| ≤200g | $4.51 |
+| ≤300g | $5.91 |
+| ≤400g | $6.62 |
+| ≤500g | $7.05 |
 
 **United States:**
 | Weight | Cost |
 |--------|------|
-| ≤100g | $3.56 |
-| ≤200g | $6.21 |
-| ≤500g | $12.43 |
+| ≤100g | $4.51 |
+| ≤200g | $7.16 |
+| ≤500g | $13.38 |
 
 **International:**
 | Weight | Cost |
 |--------|------|
-| ≤100g | $7.13 |
-| ≤200g | $12.43 |
-| ≤500g | $24.85 |
+| ≤100g | $8.08 |
+| ≤200g | $13.38 |
+| ≤500g | $25.80 |
 
 ### Parcel
 Custom quote required - contact @hermes on Slack.
@@ -214,7 +214,7 @@ Custom quote required - contact @hermes on Slack.
 ## Project Structure
 
 ```
-theseus-wrapper/
+hermes/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py                 # FastAPI app & routes
