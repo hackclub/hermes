@@ -204,7 +204,7 @@ async def handle_update_tracking_modal(ack, body, view):
 
         if order:
             order.tracking_code = tracking_code or None
-            order.fulfillment_note = fulfillment_note
+            order.fulfillment_note = fulfillment_note or None
 
             event_stmt = select(Event).where(Event.id == order.event_id)
             event_result = await db.execute(event_stmt)
