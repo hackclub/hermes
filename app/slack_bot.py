@@ -614,15 +614,35 @@ class SlackBot:
             logger.error(f"Failed to send Slack notification: {e}")
             raise
 
+    def _escape_slack_mrkdwn(self, text: str) -> str:
+        """
+        Escape special Slack mrkdwn characters to prevent markup injection.
+
+        Args:
+            text: The text to escape
+
+        Returns:
+            Text with special characters escaped
+        """
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     def _build_tracking_link(self, tracking_code: str) -> str | None:
-        from urllib.parse import quote
+        from urllib.parse import quote, urlparse
 
         if not self.settings.slack_tracking_url_template:
             return None
 
         template = self.settings.slack_tracking_url_template
         try:
-            return template.format(tracking_code=quote(tracking_code))
+            url = template.format(tracking_code=quote(tracking_code))
+            # Validate that the URL is well-formed and uses a safe scheme
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                logger.warning(
+                    "Invalid URL scheme in tracking link: %s", parsed.scheme
+                )
+                return None
+            return url
         except KeyError as exc:
             logger.error(
                 "Invalid slack_tracking_url_template '%s': %s",
@@ -680,10 +700,12 @@ class SlackBot:
 
         if tracking_code:
             tracking_link = self._build_tracking_link(tracking_code)
+            # Escape tracking code for safe display in Slack mrkdwn
+            escaped_tracking_code = self._escape_slack_mrkdwn(tracking_code)
             tracking_text = (
-                f"*Tracking Code:* <{tracking_link}|{tracking_code}>"
+                f"*Tracking Code:* <{tracking_link}|{escaped_tracking_code}>"
                 if tracking_link
-                else f"*Tracking Code:* `{tracking_code}`"
+                else f"*Tracking Code:* `{escaped_tracking_code}`"
             )
             blocks.append({
                 "type": "section",
