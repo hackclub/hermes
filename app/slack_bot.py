@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from functools import partial
+from urllib.parse import quote
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -615,8 +616,6 @@ class SlackBot:
             raise
 
     def _build_tracking_link(self, tracking_code: str) -> str | None:
-        from urllib.parse import quote
-
         if not self.settings.slack_tracking_url_template:
             return None
 
