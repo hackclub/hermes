@@ -921,12 +921,14 @@ async def handle_slack_interactions(
             fulfillment_note = values.get("fulfillment_note_block", {}).get("fulfillment_note", {}).get("value")
 
             errors = {}
-            if tracking_code and len(tracking_code) > 64:
+            if tracking_code is not None and len(tracking_code) > 64:
                 errors["tracking_code_block"] = "Tracking code must be 64 characters or less"
             if fulfillment_note and len(fulfillment_note) > 500:
                 errors["fulfillment_note_block"] = "Note must be 500 characters or less"
             if errors:
                 return JSONResponse(content={"response_action": "errors", "errors": errors})
+
+            tracking_code = tracking_code or None
 
             stmt = select(Order).where(Order.order_id == order_id)
             result = await db.execute(stmt)

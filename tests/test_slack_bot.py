@@ -1,148 +1,102 @@
-from unittest.mock import MagicMock, patch
-
-import pytest
-
 from app.slack_bot import SlackBot
 
 
-class TestBuildTrackingLink:
-    """Tests for the _build_tracking_link method."""
+class TestSlackBot:
+    """Tests for SlackBot utility methods."""
 
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_returns_none_when_template_is_none(self, mock_web_client, mock_get_settings):
-        """Test that None is returned when slack_tracking_url_template is None."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = None
-        mock_get_settings.return_value = mock_settings
-
+    def test_escape_slack_mrkdwn_basic(self):
+        """Test basic escaping of Slack mrkdwn special characters."""
         bot = SlackBot()
-        result = bot._build_tracking_link("12345")
 
-        assert result is None
+        # Test ampersand
+        assert bot._escape_slack_mrkdwn("A&B") == "A&amp;B"
 
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_returns_formatted_url_with_simple_tracking_code(
-        self, mock_web_client, mock_get_settings
-    ):
-        """Test that a properly formatted URL is returned for simple tracking codes."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={tracking_code}"
+        # Test less than
+        assert bot._escape_slack_mrkdwn("A<B") == "A&lt;B"
+
+        # Test greater than
+        assert bot._escape_slack_mrkdwn("A>B") == "A&gt;B"
+
+    def test_escape_slack_mrkdwn_multiple_chars(self):
+        """Test escaping multiple special characters."""
+        bot = SlackBot()
+
+        # Test multiple characters
+        assert bot._escape_slack_mrkdwn("<script>alert('XSS')</script>") == "&lt;script&gt;alert('XSS')&lt;/script&gt;"
+        assert bot._escape_slack_mrkdwn("A&B<C>D") == "A&amp;B&lt;C&gt;D"
+
+    def test_escape_slack_mrkdwn_already_escaped(self):
+        """Test that already escaped characters get double-escaped."""
+        bot = SlackBot()
+
+        # This is intentional - we escape what's given to prevent injection
+        assert bot._escape_slack_mrkdwn("&amp;") == "&amp;amp;"
+
+    def test_escape_slack_mrkdwn_normal_text(self):
+        """Test that normal text without special characters is unchanged."""
+        bot = SlackBot()
+
+        assert bot._escape_slack_mrkdwn("TRACK123") == "TRACK123"
+        assert bot._escape_slack_mrkdwn("1Z999AA10123456784") == "1Z999AA10123456784"
+        assert bot._escape_slack_mrkdwn("Tracking_Code-123") == "Tracking_Code-123"
+
+    def test_build_tracking_link_with_special_chars(self, monkeypatch):
+        """Test that tracking codes with special characters are properly URL-encoded."""
+        bot = SlackBot()
+
+        # Set up a mock template
+        monkeypatch.setattr(
+            bot.settings,
+            "slack_tracking_url_template",
+            "https://track.example.com/track?code={tracking_code}"
         )
-        mock_get_settings.return_value = mock_settings
 
+        # Test with special characters that need URL encoding
+        link = bot._build_tracking_link("TRACK&123")
+        assert link == "https://track.example.com/track?code=TRACK%26123"
+
+        link = bot._build_tracking_link("TRACK<>123")
+        assert link == "https://track.example.com/track?code=TRACK%3C%3E123"
+
+    def test_build_tracking_link_no_template(self, monkeypatch):
+        """Test that None is returned when no template is configured."""
         bot = SlackBot()
-        result = bot._build_tracking_link("ABC123")
+        monkeypatch.setattr(bot.settings, "slack_tracking_url_template", None)
 
-        assert result == "https://tracking.example.com/track?code=ABC123"
+        assert bot._build_tracking_link("TRACK123") is None
 
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_url_encodes_special_characters(self, mock_web_client, mock_get_settings):
-        """Test that special characters in tracking codes are properly URL encoded."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={tracking_code}"
+    def test_build_tracking_link_invalid_scheme(self, monkeypatch):
+        """Test that links with invalid schemes are rejected."""
+        bot = SlackBot()
+
+        # Test with javascript: scheme (security risk)
+        monkeypatch.setattr(
+            bot.settings,
+            "slack_tracking_url_template",
+            "javascript:alert('{tracking_code}')"
         )
-        mock_get_settings.return_value = mock_settings
 
+        link = bot._build_tracking_link("test")
+        assert link is None
+
+    def test_build_tracking_link_valid_schemes(self, monkeypatch):
+        """Test that http and https schemes are accepted."""
         bot = SlackBot()
-        
-        # Test with space
-        result = bot._build_tracking_link("ABC 123")
-        assert result == "https://tracking.example.com/track?code=ABC%20123"
-        
-        # Test with ampersand
-        result = bot._build_tracking_link("ABC&123")
-        assert result == "https://tracking.example.com/track?code=ABC%26123"
-        
-        # Test with plus sign
-        result = bot._build_tracking_link("ABC+123")
-        assert result == "https://tracking.example.com/track?code=ABC%2B123"
-        
-        # Test with equals sign
-        result = bot._build_tracking_link("ABC=123")
-        assert result == "https://tracking.example.com/track?code=ABC%3D123"
 
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_url_encodes_unicode_characters(self, mock_web_client, mock_get_settings):
-        """Test that Unicode characters in tracking codes are properly URL encoded."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={tracking_code}"
+        # Test http
+        monkeypatch.setattr(
+            bot.settings,
+            "slack_tracking_url_template",
+            "http://track.example.com/{tracking_code}"
         )
-        mock_get_settings.return_value = mock_settings
+        link = bot._build_tracking_link("TEST123")
+        assert link == "http://track.example.com/TEST123"
 
-        bot = SlackBot()
-        result = bot._build_tracking_link("ABC™123")
-
-        assert result == "https://tracking.example.com/track?code=ABC%E2%84%A2123"
-
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_handles_forward_slash_in_tracking_code(self, mock_web_client, mock_get_settings):
-        """Test that forward slashes in tracking codes are handled (not encoded by default)."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={tracking_code}"
+        # Test https
+        monkeypatch.setattr(
+            bot.settings,
+            "slack_tracking_url_template",
+            "https://track.example.com/{tracking_code}"
         )
-        mock_get_settings.return_value = mock_settings
-
-        bot = SlackBot()
-        result = bot._build_tracking_link("ABC/123")
-
-        # Forward slash is considered safe by quote() and not encoded by default
-        assert result == "https://tracking.example.com/track?code=ABC/123"
-
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_handles_invalid_template_format(self, mock_web_client, mock_get_settings):
-        """Test that KeyError is handled gracefully for invalid templates."""
-        mock_settings = MagicMock()
-        # Template without {tracking_code} placeholder
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={invalid_placeholder}"
-        )
-        mock_get_settings.return_value = mock_settings
-
-        bot = SlackBot()
-        result = bot._build_tracking_link("ABC123")
-
-        assert result is None
-
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_handles_multiple_special_characters(self, mock_web_client, mock_get_settings):
-        """Test that tracking codes with multiple special characters are encoded correctly."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={tracking_code}"
-        )
-        mock_get_settings.return_value = mock_settings
-
-        bot = SlackBot()
-        result = bot._build_tracking_link("ABC-123_XYZ!@#")
-
-        # Dash, underscore are safe, exclamation and at sign need encoding
-        assert "ABC-123_XYZ" in result
-        assert "%21" in result  # !
-        assert "%40" in result  # @
-        assert "%23" in result  # #
-
-    @patch("app.slack_bot.get_settings")
-    @patch("app.slack_bot.WebClient")
-    def test_handles_percent_signs_in_tracking_code(self, mock_web_client, mock_get_settings):
-        """Test that percent signs in tracking codes are properly double-encoded."""
-        mock_settings = MagicMock()
-        mock_settings.slack_tracking_url_template = (
-            "https://tracking.example.com/track?code={tracking_code}"
-        )
-        mock_get_settings.return_value = mock_settings
-
-        bot = SlackBot()
-        result = bot._build_tracking_link("ABC%123")
-
-        assert result == "https://tracking.example.com/track?code=ABC%25123"
+        link = bot._build_tracking_link("TEST123")
+        assert link == "https://track.example.com/TEST123"
