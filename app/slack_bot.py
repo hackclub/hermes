@@ -614,6 +614,14 @@ class SlackBot:
             logger.error(f"Failed to send Slack notification: {e}")
             raise
 
+    def _build_tracking_link(self, tracking_code: str) -> str | None:
+        from urllib.parse import quote
+
+        if not self.settings.slack_tracking_url_template:
+            return None
+
+        return self.settings.slack_tracking_url_template.format(tracking_code=quote(tracking_code))
+
     async def update_order_fulfilled(
         self,
         channel_id: str,
@@ -662,11 +670,17 @@ class SlackBot:
         ]
 
         if tracking_code:
+            tracking_link = self._build_tracking_link(tracking_code)
+            tracking_text = (
+                f"*Tracking Code:* <{tracking_link}|{tracking_code}>"
+                if tracking_link
+                else f"*Tracking Code:* `{tracking_code}`"
+            )
             blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Tracking Code:* `{tracking_code}`"
+                    "text": tracking_text
                 }
             })
 
@@ -791,7 +805,8 @@ class SlackBot:
         self,
         trigger_id: str,
         order_id: str,
-        current_tracking: str | None = None
+        current_tracking: str | None = None,
+        current_note: str | None = None
     ) -> None:
         """Opens a modal to update tracking code for an order."""
         view = {
@@ -813,20 +828,40 @@ class SlackBot:
                 {
                     "type": "input",
                     "block_id": "tracking_code_block",
+                    "optional": True,
                     "element": {
                         "type": "plain_text_input",
                         "action_id": "tracking_code",
                         "initial_value": current_tracking or "",
-                        "min_length": 1,
                         "max_length": 64,
                         "placeholder": {
                             "type": "plain_text",
-                            "text": "Enter new tracking code"
+                            "text": "Enter tracking code (optional)"
                         }
                     },
                     "label": {
                         "type": "plain_text",
                         "text": "Tracking Code"
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "fulfillment_note_block",
+                    "optional": True,
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "fulfillment_note",
+                        "initial_value": current_note or "",
+                        "multiline": True,
+                        "max_length": 500,
+                        "placeholder": {
+                            "type": "plain_text",
+                            "text": "Enter any notes (optional)"
+                        }
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": "Note"
                     }
                 }
             ]

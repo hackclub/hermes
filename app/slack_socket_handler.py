@@ -118,7 +118,8 @@ async def handle_update_tracking(ack, body, action):
                 await slack_bot.open_update_tracking_modal(
                     trigger_id,
                     order_id,
-                    order.tracking_code
+                    order.tracking_code,
+                    order.fulfillment_note
                 )
 
 
@@ -183,12 +184,15 @@ async def handle_update_tracking_modal(ack, body, view):
     values = view.get("state", {}).get("values", {})
 
     tracking_code = values.get("tracking_code_block", {}).get("tracking_code", {}).get("value")
+    fulfillment_note = values.get("fulfillment_note_block", {}).get("fulfillment_note", {}).get("value")
 
-    if not tracking_code or len(tracking_code) < 1:
-        await ack(response_action="errors", errors={"tracking_code_block": "Tracking code is required"})
-        return
-    if len(tracking_code) > 64:
-        await ack(response_action="errors", errors={"tracking_code_block": "Tracking code must be 64 characters or less"})
+    errors = {}
+    if tracking_code is not None and len(tracking_code) > 64:
+        errors["tracking_code_block"] = "Tracking code must be 64 characters or less"
+    if fulfillment_note and len(fulfillment_note) > 500:
+        errors["fulfillment_note_block"] = "Note must be 500 characters or less"
+    if errors:
+        await ack(response_action="errors", errors=errors)
         return
 
     await ack()
@@ -199,7 +203,8 @@ async def handle_update_tracking_modal(ack, body, view):
         order = result.scalar_one_or_none()
 
         if order:
-            order.tracking_code = tracking_code
+            order.tracking_code = tracking_code or None
+            order.fulfillment_note = fulfillment_note
 
             event_stmt = select(Event).where(Event.id == order.event_id)
             event_result = await db.execute(event_stmt)
