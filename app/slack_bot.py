@@ -620,7 +620,16 @@ class SlackBot:
         if not self.settings.slack_tracking_url_template:
             return None
 
-        return self.settings.slack_tracking_url_template.format(tracking_code=quote(tracking_code))
+        template = self.settings.slack_tracking_url_template
+        try:
+            return template.format(tracking_code=quote(tracking_code))
+        except KeyError as exc:
+            logger.error(
+                "Invalid slack_tracking_url_template '%s': %s",
+                template,
+                exc,
+            )
+            return None
 
     async def update_order_fulfilled(
         self,
