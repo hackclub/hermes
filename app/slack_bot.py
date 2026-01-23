@@ -639,7 +639,7 @@ class SlackBot:
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https"):
                 logger.warning(
-                    "Invalid URL scheme in tracking link: %s", parsed.scheme
+                    "Tracking link rejected: URL scheme must be http or https"
                 )
                 return None
             return url
