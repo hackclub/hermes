@@ -1060,11 +1060,15 @@ async def handle_slack_interactions(
     return JSONResponse(content={"ok": True})
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 @limiter.limit("60/minute")
 async def root(request: Request):
-    """Redirect to documentation page."""
-    return RedirectResponse(url="/docs-page")
+    """Serve the landing page."""
+    try:
+        with open("docs/landing.html") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return RedirectResponse(url="/docs-page")
 
 
 @app.get("/health")
