@@ -1065,7 +1065,7 @@ async def handle_slack_interactions(
 async def root(request: Request):
     """Serve the landing page."""
     try:
-        with open("docs/landing.html") as f:
+        with open("docs/index.html") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return RedirectResponse(url="/docs-page")
