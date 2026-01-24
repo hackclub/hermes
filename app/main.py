@@ -494,7 +494,7 @@ async def manual_status_check(_: bool = Depends(verify_admin_api_key)):
 
 
 @app.post("/api/v1/calculate-cost", response_model=CostCalculatorResponse)
-@limiter.limit("30/minute")
+@limiter.limit("5/second")
 async def calculate_shipping_cost(request: Request, body: CostCalculatorRequest):
     """Calculate shipping cost for a given mail type and destination."""
     try:
@@ -690,7 +690,7 @@ async def create_order(
 
 
 @app.get("/odr!{order_id}", response_class=HTMLResponse)
-@limiter.limit("60/minute")
+@limiter.limit("5/second")
 async def get_order_status_page(
     request: Request,
     order_id: str,
@@ -811,7 +811,7 @@ async def get_order_status_page(
 
 
 @app.get("/api/v1/order/{order_id}/status", response_model=OrderStatusResponse)
-@limiter.limit("60/minute")
+@limiter.limit("5/second")
 async def get_order_status_api(
     request: Request,
     order_id: str,
@@ -1061,7 +1061,7 @@ async def handle_slack_interactions(
 
 
 @app.get("/", response_class=HTMLResponse)
-@limiter.limit("60/minute")
+@limiter.limit("5/second")
 async def root(request: Request):
     """Serve the landing page."""
     try:
@@ -1072,14 +1072,14 @@ async def root(request: Request):
 
 
 @app.get("/health")
-@limiter.limit("60/minute")
+@limiter.limit("5/second")
 async def health_check(request: Request):
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/docs-page", response_class=HTMLResponse)
-@limiter.limit("60/minute")
+@limiter.limit("5/second")
 async def get_docs_page(request: Request):
     """Serve the custom documentation page."""
     try:
