@@ -962,11 +962,17 @@ async def handle_slack_interactions(
         elif callback_id.startswith("update_tracking_modal:"):
             order_id = callback_id.replace("update_tracking_modal:", "")
             tracking_code = values.get("tracking_code_block", {}).get("tracking_code", {}).get("value")
+            fulfillment_note = values.get("fulfillment_note_block", {}).get("fulfillment_note", {}).get("value")
 
-            if not tracking_code or len(tracking_code) < 1:
-                return JSONResponse(content={"response_action": "errors", "errors": {"tracking_code_block": "Tracking code is required"}})
-            if len(tracking_code) > 64:
-                return JSONResponse(content={"response_action": "errors", "errors": {"tracking_code_block": "Tracking code must be 64 characters or less"}})
+            errors = {}
+            if tracking_code is not None and len(tracking_code) > 64:
+                errors["tracking_code_block"] = "Tracking code must be 64 characters or less"
+            if fulfillment_note and len(fulfillment_note) > 500:
+                errors["fulfillment_note_block"] = "Note must be 500 characters or less"
+            if errors:
+                return JSONResponse(content={"response_action": "errors", "errors": errors})
+
+            tracking_code = tracking_code or None
 
             stmt = select(Order).where(Order.order_id == order_id)
             result = await db.execute(stmt)
@@ -974,6 +980,7 @@ async def handle_slack_interactions(
 
             if order:
                 order.tracking_code = tracking_code
+                order.fulfillment_note = fulfillment_note
 
                 event_stmt = select(Event).where(Event.id == order.event_id)
                 event_result = await db.execute(event_stmt)
@@ -1054,7 +1061,8 @@ async def handle_slack_interactions(
                     await slack_bot.open_update_tracking_modal(
                         trigger_id,
                         order_id,
-                        order.tracking_code
+                        order.tracking_code,
+                        order.fulfillment_note
                     )
 
     return JSONResponse(content={"ok": True})
