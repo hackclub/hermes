@@ -631,6 +631,28 @@ class SlackBot:
             )
             return None
 
+    def _escape_slack_markdown(self, text: str) -> str:
+        """
+        Escape special Slack markdown characters that could break link syntax.
+        
+        When using Slack's mrkdwn format with links like <url|text>, the text
+        portion must not contain |, <, or > characters as they would break the
+        link syntax. This function escapes these characters.
+        
+        Args:
+            text: The text to escape
+            
+        Returns:
+            The escaped text safe for use in Slack mrkdwn link display text
+        """
+        # Replace special Slack markdown characters with their HTML entity equivalents
+        # or similar safe alternatives that Slack will display correctly
+        text = text.replace("&", "&amp;")  # Must be first to avoid double-escaping
+        text = text.replace("<", "&lt;")
+        text = text.replace(">", "&gt;")
+        text = text.replace("|", "&#124;")
+        return text
+
     async def update_order_fulfilled(
         self,
         channel_id: str,
@@ -680,8 +702,11 @@ class SlackBot:
 
         if tracking_code:
             tracking_link = self._build_tracking_link(tracking_code)
+            # Escape special Slack markdown characters in the display text to prevent
+            # breaking the link syntax when tracking_code contains |, <, or >
+            escaped_tracking_code = self._escape_slack_markdown(tracking_code)
             tracking_text = (
-                f"*Tracking Code:* <{tracking_link}|{tracking_code}>"
+                f"*Tracking Code:* <{tracking_link}|{escaped_tracking_code}>"
                 if tracking_link
                 else f"*Tracking Code:* `{tracking_code}`"
             )
