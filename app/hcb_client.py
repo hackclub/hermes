@@ -129,5 +129,83 @@ class HCBClient:
                 logger.error(f"HCB API request error: {e}")
                 raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
 
+    async def list_transfers(
+        self,
+        org_slug: str,
+        limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """
+        Lists recent transfers for an organization.
+
+        Args:
+            org_slug: Organization slug
+            limit: Maximum number of transfers to return
+
+        Returns:
+            List of transfer objects
+
+        Raises:
+            HCBAPIError: If API call fails
+        """
+        url = f"{self.base_url}/organizations/{org_slug}/transfers"
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    url,
+                    headers=self._get_headers(),
+                    params={"per_page": limit},
+                    timeout=30.0
+                )
+
+                if response.status_code == 404:
+                    raise HCBAPIError(f"Organization not found: {org_slug}", status_code=404)
+
+                if response.status_code != 200:
+                    logger.error(f"HCB API error listing transfers: status {response.status_code}")
+                    raise HCBAPIError(
+                        f"HCB API error: status {response.status_code}",
+                        status_code=response.status_code
+                    )
+
+                return cast(list[dict[str, Any]], response.json())
+
+            except httpx.TimeoutException:
+                logger.error("HCB API timeout listing transfers")
+                raise HCBAPIError("HCB API timeout")
+            except httpx.RequestError as e:
+                logger.error(f"HCB API request error: {e}")
+                raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
+
+    async def find_transfer_by_reference(
+        self,
+        org_slug: str,
+        reference: str,
+        amount_cents: int
+    ) -> dict[str, Any] | None:
+        """
+        Finds a transfer by checking if its memo contains the reference string.
+
+        Args:
+            org_slug: Organization slug
+            reference: Reference string to search for in transfer memo
+            amount_cents: Expected amount (for validation)
+
+        Returns:
+            Transfer object if found, None otherwise
+        """
+        try:
+            transfers = await self.list_transfers(org_slug)
+            for transfer in transfers:
+                memo = transfer.get("memo") or transfer.get("name") or ""
+                transfer_amount = transfer.get("amount_cents", 0)
+                if reference in memo and transfer_amount == amount_cents:
+                    logger.info(f"Found matching transfer: {transfer.get('id')} for ref {reference}")
+                    return transfer
+            return None
+        except HCBAPIError as e:
+            logger.warning(f"Could not search transfers for reconciliation: {e.message}")
+            return None
+
 
 hcb_client = HCBClient()

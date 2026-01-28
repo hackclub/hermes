@@ -22,6 +22,7 @@ class LetterStatus(str, PyEnum):
 
 class DisbursementStatus(str, PyEnum):
     PENDING = "pending"
+    SENDING = "sending"  # API call in progress or may have succeeded
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -103,9 +104,11 @@ class Disbursement(Base):
     letter_count = Column(Integer, nullable=False)
     status: "DisbursementStatus" = Column(Enum(DisbursementStatus), default=DisbursementStatus.PENDING, nullable=False)  # type: ignore[assignment]
     hcb_transfer_id = Column(String(255), nullable=True)
+    hcb_memo = Column(String(255), nullable=True)  # Exact memo sent to HCB for reconciliation
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
+    last_attempt_at = Column(DateTime, nullable=True)  # When API was last called
 
     event = relationship("Event", backref="disbursements")
 

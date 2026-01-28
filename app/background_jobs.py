@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,6 +15,9 @@ from app.theseus_client import TheseusAPIError, theseus_client
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Cooldown period before retrying SENDING disbursements (to allow HCB consistency)
+SENDING_COOLDOWN_MINUTES = 15
 
 scheduler = AsyncIOScheduler()
 
@@ -135,16 +138,16 @@ async def process_billing_disbursements() -> dict:
     errors: list[dict[str, Any]] = []
 
     async with AsyncSessionLocal() as session:
-        # Step 1: Retry any PENDING disbursements from previous runs
-        pending_stmt = (
+        # Step 1: Retry any PENDING or SENDING disbursements from previous runs
+        retry_stmt = (
             select(Disbursement)
-            .where(Disbursement.status == DisbursementStatus.PENDING)
+            .where(Disbursement.status.in_([DisbursementStatus.PENDING, DisbursementStatus.SENDING]))
         )
-        pending_result = await session.execute(pending_stmt)
-        pending_disbursements = pending_result.scalars().all()
+        retry_result = await session.execute(retry_stmt)
+        retry_disbursements = retry_result.scalars().all()
 
-        for pending in pending_disbursements:
-            logger.info(f"Retrying pending disbursement {pending.idempotency_key} for event {pending.event_id}")
+        for pending in retry_disbursements:
+            logger.info(f"Processing {pending.status.value} disbursement {pending.idempotency_key} for event {pending.event_id}")
             try:
                 event_stmt = select(Event).where(Event.id == pending.event_id)
                 event_result = await session.execute(event_stmt)
@@ -157,7 +160,51 @@ async def process_billing_disbursements() -> dict:
                     await session.commit()
                     continue
 
-                memo = f"Hermes Fulfillment // {pending.letter_count} Letters"
+                # For SENDING disbursements, try to reconcile first
+                if pending.status == DisbursementStatus.SENDING and pending.hcb_memo:
+                    existing_transfer = await hcb_client.find_transfer_by_reference(
+                        org_slug=event.org_slug,
+                        reference=f"ref:{pending.idempotency_key}",
+                        amount_cents=pending.amount_cents
+                    )
+                    if existing_transfer:
+                        # Transfer already exists - just mark as completed
+                        pending.status = DisbursementStatus.COMPLETED
+                        pending.hcb_transfer_id = existing_transfer.get("id")
+                        pending.completed_at = datetime.utcnow()
+                        await session.commit()
+
+                        logger.info(f"Reconciled disbursement {pending.idempotency_key}: {pending.hcb_transfer_id}")
+
+                        await slack_bot.send_disbursement_notification(
+                            event_name=event.name,
+                            org_slug=event.org_slug,
+                            letter_count=pending.letter_count,
+                            amount_cents=pending.amount_cents,
+                            hcb_transfer_id=pending.hcb_transfer_id,
+                            idempotency_key=pending.idempotency_key
+                        )
+
+                        events_processed += 1
+                        letters_billed += pending.letter_count
+                        total_amount_cents += pending.amount_cents
+                        continue
+
+                    # If SENDING and within cooldown period, skip - don't risk double charge
+                    if pending.last_attempt_at:
+                        cooldown_until = pending.last_attempt_at + timedelta(minutes=SENDING_COOLDOWN_MINUTES)
+                        if datetime.utcnow() < cooldown_until:
+                            logger.info(f"Skipping {pending.idempotency_key} - within cooldown period until {cooldown_until}")
+                            continue
+
+                # Build memo with reference for reconciliation
+                memo = pending.hcb_memo or f"Hermes // {pending.letter_count} Letters // ref:{pending.idempotency_key}"
+
+                # Transition to SENDING before API call
+                pending.status = DisbursementStatus.SENDING
+                pending.hcb_memo = memo
+                pending.last_attempt_at = datetime.utcnow()
+                await session.commit()
 
                 hcb_response = await hcb_client.create_disbursement(
                     source_org_slug=event.org_slug,
@@ -171,7 +218,7 @@ async def process_billing_disbursements() -> dict:
                 pending.completed_at = datetime.utcnow()
                 await session.commit()
 
-                logger.info(f"Completed pending disbursement {pending.idempotency_key}: {pending.hcb_transfer_id}")
+                logger.info(f"Completed disbursement {pending.idempotency_key}: {pending.hcb_transfer_id}")
 
                 await slack_bot.send_disbursement_notification(
                     event_name=event.name,
@@ -187,17 +234,18 @@ async def process_billing_disbursements() -> dict:
                 total_amount_cents += pending.amount_cents
 
             except HCBAPIError as e:
-                logger.error(f"Failed to retry disbursement {pending.idempotency_key}: {e.message}")
+                logger.error(f"Failed to process disbursement {pending.idempotency_key}: {e.message}")
                 permanent_error_codes = {400, 403, 404}
                 if e.status_code is not None and e.status_code in permanent_error_codes:
                     pending.status = DisbursementStatus.FAILED
                     pending.error_message = e.message
                     await session.commit()
                 else:
-                    logger.info(f"Transient error for {pending.idempotency_key}, will retry later")
+                    # Keep as SENDING - will reconcile/retry next hour
+                    logger.info(f"Transient error for {pending.idempotency_key}, will reconcile/retry later")
                 errors.append({"event_id": pending.event_id, "error": e.message})
             except Exception as e:
-                logger.error(f"Unexpected error retrying disbursement {pending.idempotency_key}: {e}")
+                logger.error(f"Unexpected error processing disbursement {pending.idempotency_key}: {e}")
                 errors.append({"event_id": pending.event_id, "error": str(e)})
 
         # Step 2: Process new unbilled letters
@@ -243,17 +291,23 @@ async def process_billing_disbursements() -> dict:
             idempotency_key = str(uuid.uuid4())
 
             try:
-                # Step 3a: Create Disbursement record with PENDING status FIRST
+                # Step 3a: Build memo with unique reference for reconciliation
+                memo = f"Hermes // {letter_count} Letters // ref:{idempotency_key}"
+
+                # Step 3b: Create Disbursement record with SENDING status
+                # This is committed BEFORE the API call so we can reconcile if crash occurs
                 disbursement_record = Disbursement(
                     idempotency_key=idempotency_key,
                     event_id=event_id,
                     amount_cents=total_cost,
                     letter_count=letter_count,
-                    status=DisbursementStatus.PENDING
+                    status=DisbursementStatus.SENDING,
+                    hcb_memo=memo,
+                    last_attempt_at=datetime.utcnow()
                 )
                 session.add(disbursement_record)
 
-                # Step 3b: Mark letters as billing_paid=True BEFORE API call
+                # Step 3c: Mark letters as billing_paid=True BEFORE API call
                 # Use specific letter IDs captured earlier to avoid race condition
                 update_stmt = (
                     Letter.__table__.update()
@@ -262,16 +316,14 @@ async def process_billing_disbursements() -> dict:
                 )
                 await session.execute(update_stmt)
 
-                # Step 3c: Commit to DB - this is the critical point
+                # Step 3d: Commit to DB - this is the critical point
                 # If this fails, nothing is charged (letters remain unbilled)
-                # If this succeeds, letters are marked paid and disbursement is tracked
+                # If this succeeds, letters are marked paid and disbursement is tracked as SENDING
                 await session.commit()
 
                 logger.info(f"Persisted disbursement {idempotency_key} for {event_name}: {letter_count} letters, ${total_cost/100:.2f}")
 
                 # Step 4: Now make the HCB API call
-                memo = f"Hermes Fulfillment // {letter_count} Letters"
-
                 hcb_response = await hcb_client.create_disbursement(
                     source_org_slug=org_slug,
                     destination_org_slug=settings.hcb_fulfillment_org_slug,
@@ -303,8 +355,8 @@ async def process_billing_disbursements() -> dict:
 
             except HCBAPIError as e:
                 # API failed but letters are already marked as paid
-                # Disbursement record stays PENDING for retry next hour
-                logger.error(f"HCB API failed for {event_name} ({org_slug}): {e.message} - will retry next hour")
+                # Disbursement record stays SENDING - will reconcile/retry next hour
+                logger.error(f"HCB API failed for {event_name} ({org_slug}): {e.message} - will reconcile/retry next hour")
                 errors.append({"event": event_name, "error": e.message, "will_retry": True})
 
             except Exception as e:
