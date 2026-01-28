@@ -20,6 +20,12 @@ class LetterStatus(str, PyEnum):
     FAILED = "failed"
 
 
+class DisbursementStatus(str, PyEnum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class OrderStatus(str, PyEnum):
     PENDING = "pending"
     FULFILLED = "fulfilled"
@@ -30,7 +36,7 @@ class Event(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    org_slug = Column(String(255), nullable=False)
+    org_slug = Column(String(255), nullable=False, server_default="")
     api_key_hash = Column(String(64), unique=True, nullable=False, index=True)
     theseus_queue = Column(String(255), nullable=False)
     balance_due_cents = Column(Integer, default=0, nullable=False)
@@ -84,6 +90,32 @@ class Letter(Base):
 
     def __repr__(self):
         return f"<Letter(id={self.id}, letter_id='{self.letter_id}')>"
+
+
+class Disbursement(Base):
+    """Tracks HCB disbursement transactions for idempotency and audit."""
+    __tablename__ = "disbursements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    idempotency_key = Column(String(64), unique=True, nullable=False, index=True)
+    event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
+    amount_cents = Column(Integer, nullable=False)
+    letter_count = Column(Integer, nullable=False)
+    status: "DisbursementStatus" = Column(Enum(DisbursementStatus), default=DisbursementStatus.PENDING, nullable=False)  # type: ignore[assignment]
+    hcb_transfer_id = Column(String(255), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    event = relationship("Event", backref="disbursements")
+
+    __table_args__ = (
+        Index("ix_disbursements_event_id", "event_id"),
+        Index("ix_disbursements_status", "status"),
+    )
+
+    def __repr__(self):
+        return f"<Disbursement(id={self.id}, key='{self.idempotency_key}', status='{self.status}')>"
 
 
 class Order(Base):

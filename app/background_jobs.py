@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -7,7 +8,7 @@ from sqlalchemy import func, select
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.hcb_client import HCBAPIError, hcb_client
-from app.models import Event, Letter, LetterStatus
+from app.models import Disbursement, DisbursementStatus, Event, Letter, LetterStatus
 from app.slack_bot import slack_bot
 from app.theseus_client import TheseusAPIError, theseus_client
 
@@ -101,14 +102,22 @@ async def check_all_pending_letters() -> dict:
 
 async def process_billing_disbursements() -> dict:
     """
-    Processes billing for all events with unbilled letters.
+    Processes billing for all events with unbilled letters using idempotent transactions.
 
-    Runs every hour:
-    1. Group unbilled letters by event
-    2. For each event with unbilled letters:
-       - Calculate total amount
+    Runs every hour with idempotency protection:
+    1. First, retry any PENDING disbursements from previous failed runs
+    2. Group unbilled letters by event
+    3. For each event with unbilled letters:
+       - Generate unique idempotency key
+       - Create Disbursement record with PENDING status (persisted first!)
+       - Mark letters as billing_paid=True (before API call)
+       - Commit to DB (ensures state is saved)
        - Create HCB disbursement from event's org to hermes-fulfillment
-       - Mark letters as billing_paid=True
+       - Update Disbursement to COMPLETED with HCB transfer ID
+       - Log to Slack
+
+    This flow prevents double billing: if the DB commit succeeds but API fails,
+    the letters are already marked as paid. If DB commit fails, nothing is charged.
 
     Returns:
         Dict with events_processed, letters_billed, and total_amount_cents
@@ -125,6 +134,68 @@ async def process_billing_disbursements() -> dict:
     errors = []
 
     async with AsyncSessionLocal() as session:
+        # Step 1: Retry any PENDING disbursements from previous runs
+        pending_stmt = (
+            select(Disbursement)
+            .where(Disbursement.status == DisbursementStatus.PENDING)
+        )
+        pending_result = await session.execute(pending_stmt)
+        pending_disbursements = pending_result.scalars().all()
+
+        for pending in pending_disbursements:
+            logger.info(f"Retrying pending disbursement {pending.idempotency_key} for event {pending.event_id}")
+            try:
+                event_stmt = select(Event).where(Event.id == pending.event_id)
+                event_result = await session.execute(event_stmt)
+                event = event_result.scalar_one_or_none()
+
+                if not event:
+                    logger.error(f"Event {pending.event_id} not found for pending disbursement")
+                    pending.status = DisbursementStatus.FAILED
+                    pending.error_message = "Event not found"
+                    await session.commit()
+                    continue
+
+                memo = f"Hermes Fulfillment // {pending.letter_count} Letters"
+
+                hcb_response = await hcb_client.create_disbursement(
+                    source_org_slug=event.org_slug,
+                    destination_org_slug=settings.hcb_fulfillment_org_slug,
+                    amount_cents=pending.amount_cents,
+                    name=memo
+                )
+
+                pending.status = DisbursementStatus.COMPLETED
+                pending.hcb_transfer_id = hcb_response.get("id")
+                pending.completed_at = datetime.utcnow()
+                await session.commit()
+
+                logger.info(f"Completed pending disbursement {pending.idempotency_key}: {pending.hcb_transfer_id}")
+
+                await slack_bot.send_disbursement_notification(
+                    event_name=event.name,
+                    org_slug=event.org_slug,
+                    letter_count=pending.letter_count,
+                    amount_cents=pending.amount_cents,
+                    hcb_transfer_id=pending.hcb_transfer_id,
+                    idempotency_key=pending.idempotency_key
+                )
+
+                events_processed += 1
+                letters_billed += pending.letter_count
+                total_amount_cents += pending.amount_cents
+
+            except HCBAPIError as e:
+                logger.error(f"Failed to retry disbursement {pending.idempotency_key}: {e.message}")
+                pending.status = DisbursementStatus.FAILED
+                pending.error_message = e.message
+                await session.commit()
+                errors.append({"event_id": pending.event_id, "error": e.message})
+            except Exception as e:
+                logger.error(f"Unexpected error retrying disbursement {pending.idempotency_key}: {e}")
+                errors.append({"event_id": pending.event_id, "error": str(e)})
+
+        # Step 2: Process new unbilled letters
         stmt = (
             select(
                 Event.id,
@@ -143,20 +214,20 @@ async def process_billing_disbursements() -> dict:
         logger.info(f"Found {len(event_billing)} events with unbilled letters")
 
         for event_id, event_name, org_slug, letter_count, total_cost in event_billing:
+            idempotency_key = str(uuid.uuid4())
+
             try:
-                memo = f"Hermes Fulfillment // {letter_count} Letters"
-
-                logger.info(f"Creating disbursement for {event_name}: {letter_count} letters, ${total_cost/100:.2f}")
-
-                disbursement = await hcb_client.create_disbursement(
-                    source_org_slug=org_slug,
-                    destination_org_slug=settings.hcb_fulfillment_org_slug,
+                # Step 3a: Create Disbursement record with PENDING status FIRST
+                disbursement_record = Disbursement(
+                    idempotency_key=idempotency_key,
+                    event_id=event_id,
                     amount_cents=total_cost,
-                    name=memo
+                    letter_count=letter_count,
+                    status=DisbursementStatus.PENDING
                 )
+                session.add(disbursement_record)
 
-                logger.info(f"Disbursement created for {event_name}: {disbursement.get('id')}")
-
+                # Step 3b: Mark letters as billing_paid=True BEFORE API call
                 update_stmt = (
                     Letter.__table__.update()
                     .where(Letter.event_id == event_id)
@@ -164,19 +235,55 @@ async def process_billing_disbursements() -> dict:
                     .values(billing_paid=True)
                 )
                 await session.execute(update_stmt)
+
+                # Step 3c: Commit to DB - this is the critical point
+                # If this fails, nothing is charged (letters remain unbilled)
+                # If this succeeds, letters are marked paid and disbursement is tracked
                 await session.commit()
+
+                logger.info(f"Persisted disbursement {idempotency_key} for {event_name}: {letter_count} letters, ${total_cost/100:.2f}")
+
+                # Step 4: Now make the HCB API call
+                memo = f"Hermes Fulfillment // {letter_count} Letters"
+
+                hcb_response = await hcb_client.create_disbursement(
+                    source_org_slug=org_slug,
+                    destination_org_slug=settings.hcb_fulfillment_org_slug,
+                    amount_cents=total_cost,
+                    name=memo
+                )
+
+                # Step 5: Update disbursement record with success
+                disbursement_record.status = DisbursementStatus.COMPLETED
+                disbursement_record.hcb_transfer_id = hcb_response.get("id")
+                disbursement_record.completed_at = datetime.utcnow()
+                await session.commit()
+
+                logger.info(f"Disbursement completed for {event_name}: {hcb_response.get('id')}")
+
+                # Step 6: Log to Slack
+                await slack_bot.send_disbursement_notification(
+                    event_name=event_name,
+                    org_slug=org_slug,
+                    letter_count=letter_count,
+                    amount_cents=total_cost,
+                    hcb_transfer_id=hcb_response.get("id"),
+                    idempotency_key=idempotency_key
+                )
 
                 events_processed += 1
                 letters_billed += letter_count
                 total_amount_cents += total_cost
 
-                logger.info(f"Marked {letter_count} letters as paid for {event_name}")
-
             except HCBAPIError as e:
-                logger.error(f"Failed to create disbursement for {event_name} ({org_slug}): {e.message}")
-                errors.append({"event": event_name, "error": e.message})
+                # API failed but letters are already marked as paid
+                # Disbursement record stays PENDING for retry next hour
+                logger.error(f"HCB API failed for {event_name} ({org_slug}): {e.message} - will retry next hour")
+                errors.append({"event": event_name, "error": e.message, "will_retry": True})
+
             except Exception as e:
                 logger.error(f"Unexpected error processing billing for {event_name}: {e}")
+                await session.rollback()
                 errors.append({"event": event_name, "error": str(e)})
 
     logger.info(

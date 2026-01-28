@@ -274,6 +274,54 @@ class SlackBot:
         except SlackApiError as e:
             logger.error(f"Failed to send error notification: {e}")
 
+    async def send_disbursement_notification(
+        self,
+        event_name: str,
+        org_slug: str,
+        letter_count: int,
+        amount_cents: int,
+        hcb_transfer_id: str | None,
+        idempotency_key: str
+    ) -> None:
+        """Sends a notification when an HCB disbursement is created."""
+        amount_usd = cents_to_usd(amount_cents)
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "💰 HCB Disbursement Created",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Event:* {event_name}\n*Org:* `{org_slug}`\n*Letters:* {letter_count}\n*Amount:* ${amount_usd:.2f}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*HCB Transfer ID:* `{hcb_transfer_id or 'N/A'}`\n*Idempotency Key:* `{idempotency_key}`"
+                }
+            }
+        ]
+
+        try:
+            await self._run_sync(
+                self.client.chat_postMessage,
+                channel=self.notification_channel,
+                blocks=blocks,
+                text=f"Disbursement created: {event_name} - ${amount_usd:.2f}"
+            )
+            logger.info(f"Disbursement notification sent for {event_name}: ${amount_usd:.2f}")
+        except SlackApiError as e:
+            logger.error(f"Failed to send disbursement notification: {e}")
+
     async def send_parcel_quote_request(
         self,
         event_name: str,
