@@ -30,6 +30,7 @@ class Event(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
+    org_slug = Column(String(255), nullable=False)
     api_key_hash = Column(String(64), unique=True, nullable=False, index=True)
     theseus_queue = Column(String(255), nullable=False)
     balance_due_cents = Column(Integer, default=0, nullable=False)
@@ -69,6 +70,7 @@ class Letter(Base):
     notes = Column(Text, nullable=True)
 
     cost_cents = Column(Integer, nullable=False)
+    billing_paid = Column(Boolean, default=False, nullable=False)  # Whether this letter has been billed via HCB disbursement
     status: "LetterStatus" = Column(Enum(LetterStatus), default=LetterStatus.QUEUED, nullable=False)  # type: ignore[assignment]
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     mailed_at = Column(DateTime, nullable=True)

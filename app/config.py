@@ -18,6 +18,11 @@ class Settings(BaseSettings):
 
     airtable_api_key: str = ""
 
+    # HCB V4 API for disbursements
+    hcb_api_key: str = ""  # Bearer token for HCB V4 API
+    hcb_base_url: str = "https://hcb.hackclub.com/api/v4"
+    hcb_fulfillment_org_slug: str = "hermes-fulfillment"  # Destination org for billing
+
     admin_api_key: str
 
     api_host: str = "0.0.0.0"  # nosec B104 - Intentional for container deployment
