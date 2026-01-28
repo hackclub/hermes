@@ -194,18 +194,14 @@ class HCBClient:
         Returns:
             Transfer object if found, None otherwise
         """
-        try:
-            transfers = await self.list_transfers(org_slug)
-            for transfer in transfers:
-                memo = transfer.get("memo") or transfer.get("name") or ""
-                transfer_amount = transfer.get("amount_cents", 0)
-                if reference in memo and transfer_amount == amount_cents:
-                    logger.info(f"Found matching transfer: {transfer.get('id')} for ref {reference}")
-                    return transfer
-            return None
-        except HCBAPIError as e:
-            logger.warning(f"Could not search transfers for reconciliation: {e.message}")
-            return None
+        transfers = await self.list_transfers(org_slug)
+        for transfer in transfers:
+            memo = transfer.get("memo") or transfer.get("name") or ""
+            transfer_amount = transfer.get("amount_cents", 0)
+            if reference in memo and transfer_amount == amount_cents:
+                logger.info(f"Found matching transfer: {transfer.get('id')} for ref {reference}")
+                return transfer
+        return None
 
 
 hcb_client = HCBClient()
