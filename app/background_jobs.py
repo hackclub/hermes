@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
@@ -219,7 +219,7 @@ async def process_billing_disbursements() -> dict:
 
         # Get event details for events with unbilled letters
         if not event_letter_map:
-            event_billing = []
+            event_billing: list[tuple[int, str, str]] = []
         else:
             stmt = (
                 select(Event.id, Event.name, Event.org_slug)

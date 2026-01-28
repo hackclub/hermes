@@ -32,8 +32,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models import Event
-
 # =============================================================================
 # BACKFILL MAPPING - Edit this before running!
 # =============================================================================
