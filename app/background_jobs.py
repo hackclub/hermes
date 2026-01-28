@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, select
@@ -131,7 +132,7 @@ async def process_billing_disbursements() -> dict:
     events_processed = 0
     letters_billed = 0
     total_amount_cents = 0
-    errors = []
+    errors: list[dict[str, Any]] = []
 
     async with AsyncSessionLocal() as session:
         # Step 1: Retry any PENDING disbursements from previous runs
@@ -187,33 +188,58 @@ async def process_billing_disbursements() -> dict:
 
             except HCBAPIError as e:
                 logger.error(f"Failed to retry disbursement {pending.idempotency_key}: {e.message}")
-                pending.status = DisbursementStatus.FAILED
-                pending.error_message = e.message
-                await session.commit()
+                permanent_error_codes = {400, 403, 404}
+                if e.status_code is not None and e.status_code in permanent_error_codes:
+                    pending.status = DisbursementStatus.FAILED
+                    pending.error_message = e.message
+                    await session.commit()
+                else:
+                    logger.info(f"Transient error for {pending.idempotency_key}, will retry later")
                 errors.append({"event_id": pending.event_id, "error": e.message})
             except Exception as e:
                 logger.error(f"Unexpected error retrying disbursement {pending.idempotency_key}: {e}")
                 errors.append({"event_id": pending.event_id, "error": str(e)})
 
         # Step 2: Process new unbilled letters
-        stmt = (
-            select(
-                Event.id,
-                Event.name,
-                Event.org_slug,
-                func.count(Letter.id).label("letter_count"),
-                func.sum(Letter.cost_cents).label("total_cost")
-            )
-            .join(Letter, Letter.event_id == Event.id)
+        # First, get all unbilled letters with their IDs to avoid race conditions
+        letter_stmt = (
+            select(Letter.id, Letter.event_id, Letter.cost_cents)
             .where(Letter.billing_paid == False)  # noqa: E712
-            .group_by(Event.id, Event.name, Event.org_slug)
         )
-        result = await session.execute(stmt)
-        event_billing = result.all()
+        letter_result = await session.execute(letter_stmt)
+        unbilled_letters = letter_result.all()
+
+        # Group letters by event_id with their IDs and costs
+        from collections import defaultdict
+        event_letter_map: dict[int, list[int]] = defaultdict(list)
+        event_cost_map: dict[int, int] = defaultdict(int)
+        for letter_id, event_id, cost_cents in unbilled_letters:
+            event_letter_map[event_id].append(letter_id)
+            event_cost_map[event_id] += cost_cents or 0
+
+        # Get event details for events with unbilled letters
+        if not event_letter_map:
+            event_billing = []
+        else:
+            stmt = (
+                select(Event.id, Event.name, Event.org_slug)
+                .where(Event.id.in_(event_letter_map.keys()))
+            )
+            result = await session.execute(stmt)
+            event_billing = result.all()
 
         logger.info(f"Found {len(event_billing)} events with unbilled letters")
 
-        for event_id, event_name, org_slug, letter_count, total_cost in event_billing:
+        for event_id, event_name, org_slug in event_billing:
+            # Skip events with empty or null org_slug to avoid 404 errors
+            if not org_slug:
+                logger.warning(f"Skipping billing for event '{event_name}' (id={event_id}): org_slug is empty or null")
+                errors.append({"event": event_name, "error": "Missing org_slug - cannot bill", "will_retry": False})
+                continue
+
+            letter_ids = event_letter_map[event_id]
+            letter_count = len(letter_ids)
+            total_cost = event_cost_map[event_id]
             idempotency_key = str(uuid.uuid4())
 
             try:
@@ -228,10 +254,10 @@ async def process_billing_disbursements() -> dict:
                 session.add(disbursement_record)
 
                 # Step 3b: Mark letters as billing_paid=True BEFORE API call
+                # Use specific letter IDs captured earlier to avoid race condition
                 update_stmt = (
                     Letter.__table__.update()
-                    .where(Letter.event_id == event_id)
-                    .where(Letter.billing_paid == False)  # noqa: E712
+                    .where(Letter.id.in_(letter_ids))
                     .values(billing_paid=True)
                 )
                 await session.execute(update_stmt)

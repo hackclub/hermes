@@ -36,7 +36,7 @@ class Event(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    org_slug = Column(String(255), nullable=False, server_default="")
+    org_slug = Column(String(255), nullable=True, server_default=None)
     api_key_hash = Column(String(64), unique=True, nullable=False, index=True)
     theseus_queue = Column(String(255), nullable=False)
     balance_due_cents = Column(Integer, default=0, nullable=False)

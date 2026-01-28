@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -54,7 +54,7 @@ class HCBClient:
                         status_code=response.status_code
                     )
 
-                return response.json()
+                return cast(dict[str, Any], response.json())
 
             except httpx.TimeoutException:
                 logger.error("HCB API timeout")
@@ -118,7 +118,7 @@ class HCBClient:
                         status_code=response.status_code
                     )
 
-                result = response.json()
+                result = cast(dict[str, Any], response.json())
                 logger.info(f"Disbursement created successfully: {result.get('id')}")
                 return result
 
