@@ -243,6 +243,8 @@ async def _handle_slash_command(ack, body, client, respond, command_name: str):
         await handle_financial_command(respond)
     elif text == "status":
         await handle_status_command(respond)
+    elif text == "bill":
+        await handle_bill_command(respond)
     else:
         await respond(
             response_type="ephemeral",
@@ -252,7 +254,8 @@ async def _handle_slash_command(ack, body, client, respond, command_name: str):
                 f"• `{command_name} summary` - View unmailed letters by program & region\n"
                 f"• `{command_name} financial` - View unpaid balances\n"
                 f"• `{command_name} paid` - Mark an event as paid\n"
-                f"• `{command_name} status` - Check system status"
+                f"• `{command_name} status` - Check system status\n"
+                f"• `{command_name} bill` - Process all pending HCB billing now"
             )
         )
 
@@ -540,6 +543,46 @@ async def handle_status_command(respond):
         response_type="ephemeral",
         text="\n".join(lines)
     )
+
+
+async def handle_bill_command(respond):
+    """Immediately process all pending HCB billing."""
+    from app.background_jobs import process_billing_disbursements
+
+    await respond(
+        response_type="ephemeral",
+        text="⏳ Processing HCB billing..."
+    )
+
+    try:
+        result = await process_billing_disbursements()
+        events_processed = result.get("events_processed", 0)
+        letters_billed = result.get("letters_billed", 0)
+        total_cents = result.get("total_amount_cents", 0)
+
+        if events_processed == 0:
+            await respond(
+                response_type="ephemeral",
+                text="✅ No pending billing to process."
+            )
+        else:
+            from app.cost_calculator import cents_to_usd
+            total_usd = cents_to_usd(total_cents)
+            await respond(
+                response_type="ephemeral",
+                text=(
+                    f"✅ *Billing Complete*\n\n"
+                    f"• Events processed: {events_processed}\n"
+                    f"• Letters billed: {letters_billed}\n"
+                    f"• Total amount: {total_usd}"
+                )
+            )
+    except Exception as e:
+        logger.error(f"Error processing billing: {e}")
+        await respond(
+            response_type="ephemeral",
+            text=f"❌ Error processing billing: {e}"
+        )
 
 
 @bolt_app.view("mark_event_paid")
