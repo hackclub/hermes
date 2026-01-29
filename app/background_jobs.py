@@ -400,12 +400,12 @@ def start_scheduler():
     scheduler.add_job(
         process_billing_disbursements,
         'interval',
-        minutes=30,
+        minutes=2,
         id='process_billing',
         replace_existing=True
     )
     scheduler.start()
-    logger.info("Background scheduler started - checking letter status every hour, processing billing every 30 minutes")
+    logger.info("Background scheduler started - checking letter status every hour, processing billing every 2 minutes")
 
 
 def stop_scheduler():
