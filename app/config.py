@@ -6,6 +6,17 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str
 
+    @property
+    def async_database_url(self) -> str:
+        """Convert database URL to async format for SQLAlchemy."""
+        url = self.database_url
+        # Handle postgres:// -> postgresql+asyncpg://
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
+
     theseus_api_key: str
     theseus_base_url: str = "https://mail.hackclub.com/api/v1"
 
