@@ -16,110 +16,141 @@ class HCBAPIError(Exception):
 
 
 class HCBClient:
-    """Client for HCB V4 API to create disbursements."""
+    """
+    Client for HCB V4 API using OAuth2.
+
+    Requires:
+    - HCB_CLIENT_ID: OAuth2 client ID (UID)
+    - HCB_CLIENT_SECRET: OAuth2 client secret
+    - HCB_ACCESS_TOKEN: Initial access token (obtained via OAuth flow)
+    - HCB_REFRESH_TOKEN: Refresh token (obtained via OAuth flow)
+
+    The client automatically refreshes expired tokens using the refresh_token grant.
+    """
 
     def __init__(self):
         self.settings = get_settings()
         self.base_url = self.settings.hcb_base_url.rstrip("/")
-        self._access_token: str | None = None
+        self._access_token: str = self.settings.hcb_access_token
+        self._refresh_token: str = self.settings.hcb_refresh_token
+        self._token_url = "https://hcb.hackclub.com/api/v4/oauth/token"
 
-    async def _get_access_token(self) -> str:
+    async def _refresh_access_token(self) -> str:
         """
-        Get an access token using OAuth2 client credentials flow.
-        Caches the token for reuse.
+        Refresh the access token using OAuth2 refresh_token grant.
         """
-        if self._access_token:
-            return self._access_token
+        if not self._refresh_token:
+            raise HCBAPIError("No refresh token available - need to re-authorize")
 
-        # OAuth token endpoint - try without /api/v4 prefix
-        token_url = "https://hcb.hackclub.com/oauth/token"
+        if not self.settings.hcb_client_id or not self.settings.hcb_client_secret:
+            raise HCBAPIError("HCB_CLIENT_ID and HCB_CLIENT_SECRET required for token refresh")
+
+        logger.info("Refreshing HCB access token...")
 
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
-                    token_url,
+                    self._token_url,
                     data={
-                        "grant_type": "client_credentials",
+                        "grant_type": "refresh_token",
+                        "refresh_token": self._refresh_token,
                         "client_id": self.settings.hcb_client_id,
                         "client_secret": self.settings.hcb_client_secret,
                     },
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                     timeout=30.0,
-                    follow_redirects=False,
                 )
 
-                logger.info(f"HCB OAuth response: {response.status_code}")
-
-                if response.status_code == 302:
-                    # Log redirect location for debugging
-                    location = response.headers.get("location", "unknown")
-                    logger.error(f"HCB OAuth redirected to: {location}")
-                    raise HCBAPIError(
-                        f"HCB OAuth endpoint redirected (302) to {location}. "
-                        "Client credentials grant may not be supported.",
-                        status_code=302,
-                    )
-
                 if response.status_code != 200:
-                    logger.error(f"HCB OAuth failed: {response.status_code} - {response.text}")
+                    logger.error(f"HCB token refresh failed: {response.status_code} - {response.text}")
                     raise HCBAPIError(
-                        f"Failed to obtain HCB access token: {response.status_code} - {response.text}",
+                        f"Failed to refresh HCB access token: {response.status_code}",
                         status_code=response.status_code,
                     )
 
                 token_data = response.json()
                 self._access_token = token_data["access_token"]
-                logger.info("Successfully obtained HCB access token")
+                # Update refresh token if a new one is provided
+                if "refresh_token" in token_data:
+                    self._refresh_token = token_data["refresh_token"]
+                    logger.info("HCB refresh token also updated")
+
+                logger.info("Successfully refreshed HCB access token")
                 return self._access_token
 
             except httpx.TimeoutException:
-                logger.error("HCB OAuth token request timed out")
-                raise HCBAPIError("HCB OAuth token request timeout")
+                logger.error("HCB token refresh timed out")
+                raise HCBAPIError("HCB token refresh timeout")
             except httpx.RequestError as e:
-                logger.error(f"HCB OAuth token request error: {e}")
-                raise HCBAPIError(f"Failed to connect to HCB OAuth: {str(e)}")
+                logger.error(f"HCB token refresh error: {e}")
+                raise HCBAPIError(f"Failed to refresh HCB token: {str(e)}")
 
-    async def _get_headers(self) -> dict:
-        token = await self._get_access_token()
+    def _get_headers(self) -> dict:
         return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {self._access_token}",
         }
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        retry_on_401: bool = True,
+        **kwargs
+    ) -> httpx.Response:
+        """Make a request, refreshing token on 401 and retrying once."""
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method,
+                url,
+                headers=self._get_headers(),
+                timeout=30.0,
+                **kwargs
+            )
+
+            # If unauthorized and we have refresh capability, try refreshing
+            if response.status_code == 401 and retry_on_401 and self._refresh_token:
+                logger.info("Access token expired (401), attempting refresh...")
+                await self._refresh_access_token()
+
+                # Retry with new token
+                response = await client.request(
+                    method,
+                    url,
+                    headers=self._get_headers(),
+                    timeout=30.0,
+                    **kwargs
+                )
+
+            return response
 
     async def get_organization(self, org_slug_or_id: str) -> dict[str, Any]:
         """
         Gets organization details by slug or ID.
-        Used to get the org ID from a slug.
         """
         url = f"{self.base_url}/organizations/{org_slug_or_id}"
-        headers = await self._get_headers()
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url,
-                    headers=headers,
-                    timeout=30.0
+        try:
+            response = await self._request("GET", url)
+
+            if response.status_code == 404:
+                raise HCBAPIError(f"Organization not found: {org_slug_or_id}", status_code=404)
+
+            if response.status_code != 200:
+                logger.error(f"HCB API error getting organization: status {response.status_code}")
+                raise HCBAPIError(
+                    f"HCB API error: status {response.status_code}",
+                    status_code=response.status_code
                 )
 
-                if response.status_code == 404:
-                    raise HCBAPIError(f"Organization not found: {org_slug_or_id}", status_code=404)
+            return cast(dict[str, Any], response.json())
 
-                if response.status_code != 200:
-                    logger.error(f"HCB API error getting organization: status {response.status_code}")
-                    raise HCBAPIError(
-                        f"HCB API error: status {response.status_code}",
-                        status_code=response.status_code
-                    )
-
-                return cast(dict[str, Any], response.json())
-
-            except httpx.TimeoutException:
-                logger.error("HCB API timeout")
-                raise HCBAPIError("HCB API timeout")
-            except httpx.RequestError as e:
-                logger.error(f"HCB API request error: {e}")
-                raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
+        except httpx.TimeoutException:
+            logger.error("HCB API timeout")
+            raise HCBAPIError("HCB API timeout")
+        except httpx.RequestError as e:
+            logger.error(f"HCB API request error: {e}")
+            raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
 
     async def create_disbursement(
         self,
@@ -153,40 +184,33 @@ class HCBClient:
 
         logger.info(f"Creating HCB disbursement: {source_org_slug} -> {destination_org_slug}, ${amount_cents/100:.2f}")
 
-        headers = await self._get_headers()
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=30.0
+        try:
+            response = await self._request("POST", url, json=payload)
+
+            if response.status_code == 404:
+                raise HCBAPIError(f"Organization not found: {source_org_slug}", status_code=404)
+
+            if response.status_code == 403:
+                raise HCBAPIError("Not authorized to create disbursement from this organization", status_code=403)
+
+            if response.status_code not in (200, 201):
+                error_msg = response.text
+                logger.error(f"HCB API error creating disbursement: status {response.status_code}, body: {error_msg}")
+                raise HCBAPIError(
+                    f"HCB API error: status {response.status_code} - {error_msg}",
+                    status_code=response.status_code
                 )
 
-                if response.status_code == 404:
-                    raise HCBAPIError(f"Organization not found: {source_org_slug}", status_code=404)
+            result = cast(dict[str, Any], response.json())
+            logger.info(f"Disbursement created successfully: {result.get('id')}")
+            return result
 
-                if response.status_code == 403:
-                    raise HCBAPIError("Not authorized to create disbursement from this organization", status_code=403)
-
-                if response.status_code not in (200, 201):
-                    error_msg = response.text
-                    logger.error(f"HCB API error creating disbursement: status {response.status_code}, body: {error_msg}")
-                    raise HCBAPIError(
-                        f"HCB API error: status {response.status_code} - {error_msg}",
-                        status_code=response.status_code
-                    )
-
-                result = cast(dict[str, Any], response.json())
-                logger.info(f"Disbursement created successfully: {result.get('id')}")
-                return result
-
-            except httpx.TimeoutException:
-                logger.error("HCB API timeout")
-                raise HCBAPIError("HCB API timeout")
-            except httpx.RequestError as e:
-                logger.error(f"HCB API request error: {e}")
-                raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
+        except httpx.TimeoutException:
+            logger.error("HCB API timeout")
+            raise HCBAPIError("HCB API timeout")
+        except httpx.RequestError as e:
+            logger.error(f"HCB API request error: {e}")
+            raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
 
     async def list_transfers(
         self,
@@ -207,35 +231,28 @@ class HCBClient:
             HCBAPIError: If API call fails
         """
         url = f"{self.base_url}/organizations/{org_slug}/transfers"
-        headers = await self._get_headers()
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url,
-                    headers=headers,
-                    params={"per_page": limit},
-                    timeout=30.0
+        try:
+            response = await self._request("GET", url, params={"per_page": limit})
+
+            if response.status_code == 404:
+                raise HCBAPIError(f"Organization not found: {org_slug}", status_code=404)
+
+            if response.status_code != 200:
+                logger.error(f"HCB API error listing transfers: status {response.status_code}")
+                raise HCBAPIError(
+                    f"HCB API error: status {response.status_code}",
+                    status_code=response.status_code
                 )
 
-                if response.status_code == 404:
-                    raise HCBAPIError(f"Organization not found: {org_slug}", status_code=404)
+            return cast(list[dict[str, Any]], response.json())
 
-                if response.status_code != 200:
-                    logger.error(f"HCB API error listing transfers: status {response.status_code}")
-                    raise HCBAPIError(
-                        f"HCB API error: status {response.status_code}",
-                        status_code=response.status_code
-                    )
-
-                return cast(list[dict[str, Any]], response.json())
-
-            except httpx.TimeoutException:
-                logger.error("HCB API timeout listing transfers")
-                raise HCBAPIError("HCB API timeout")
-            except httpx.RequestError as e:
-                logger.error(f"HCB API request error: {e}")
-                raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
+        except httpx.TimeoutException:
+            logger.error("HCB API timeout listing transfers")
+            raise HCBAPIError("HCB API timeout")
+        except httpx.RequestError as e:
+            logger.error(f"HCB API request error: {e}")
+            raise HCBAPIError(f"Failed to connect to HCB API: {str(e)}")
 
     async def find_transfer_by_reference(
         self,
