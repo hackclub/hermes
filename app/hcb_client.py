@@ -31,7 +31,8 @@ class HCBClient:
         if self._access_token:
             return self._access_token
 
-        token_url = f"{self.base_url}/oauth/token"
+        # OAuth token endpoint - try without /api/v4 prefix
+        token_url = "https://hcb.hackclub.com/oauth/token"
 
         async with httpx.AsyncClient() as client:
             try:
@@ -44,12 +45,25 @@ class HCBClient:
                     },
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                     timeout=30.0,
+                    follow_redirects=False,
                 )
 
-                if response.status_code != 200:
-                    logger.error(f"HCB OAuth token request failed: {response.status_code} - {response.text}")
+                logger.info(f"HCB OAuth response: {response.status_code}")
+
+                if response.status_code == 302:
+                    # Log redirect location for debugging
+                    location = response.headers.get("location", "unknown")
+                    logger.error(f"HCB OAuth redirected to: {location}")
                     raise HCBAPIError(
-                        f"Failed to obtain HCB access token: {response.status_code}",
+                        f"HCB OAuth endpoint redirected (302) to {location}. "
+                        "Client credentials grant may not be supported.",
+                        status_code=302,
+                    )
+
+                if response.status_code != 200:
+                    logger.error(f"HCB OAuth failed: {response.status_code} - {response.text}")
+                    raise HCBAPIError(
+                        f"Failed to obtain HCB access token: {response.status_code} - {response.text}",
                         status_code=response.status_code,
                     )
 
@@ -78,8 +92,8 @@ class HCBClient:
         Used to get the org ID from a slug.
         """
         url = f"{self.base_url}/organizations/{org_slug_or_id}"
-
         headers = await self._get_headers()
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
@@ -193,8 +207,8 @@ class HCBClient:
             HCBAPIError: If API call fails
         """
         url = f"{self.base_url}/organizations/{org_slug}/transfers"
-
         headers = await self._get_headers()
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(

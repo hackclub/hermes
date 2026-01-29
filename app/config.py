@@ -29,9 +29,9 @@ class Settings(BaseSettings):
 
     airtable_api_key: str = ""
 
-    # HCB V4 API for disbursements (OAuth2 client credentials)
-    hcb_client_id: str = ""  # OAuth2 UID from HCB
-    hcb_client_secret: str = ""  # OAuth2 Secret from HCB
+    # HCB V4 API for disbursements (OAuth2)
+    hcb_client_id: str = ""  # OAuth2 UID
+    hcb_client_secret: str = ""  # OAuth2 Secret
     hcb_base_url: str = "https://hcb.hackclub.com/api/v4"
     hcb_fulfillment_org_slug: str = "hermes-fulfillment"  # Destination org for billing
 
