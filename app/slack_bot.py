@@ -274,6 +274,127 @@ class SlackBot:
         except SlackApiError as e:
             logger.error(f"Failed to send error notification: {e}")
 
+    async def send_disbursement_failure_notification(
+        self,
+        event_name: str,
+        org_slug: str,
+        letter_count: int,
+        amount_cents: int,
+        error_message: str,
+        idempotency_key: str
+    ) -> None:
+        """Sends a disbursement failure notification to Slack, pinging Jenin for manual resolution."""
+        amount_dollars = amount_cents / 100
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "🚨 Disbursement Failed - Manual Action Required",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Event:* {event_name}\n"
+                        f"*Organization:* `{org_slug}`\n"
+                        f"*Letters:* {letter_count}\n"
+                        f"*Amount:* ${amount_dollars:.2f}"
+                    )
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Error:* {error_message}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Idempotency Key:* `{idempotency_key}`"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"<@{self.jenin_user_id}> - Please manually disburse ${amount_dollars:.2f} "
+                        f"from `{org_slug}` to `{self.settings.hcb_fulfillment_org_slug}` on HCB."
+                    ) if self.jenin_user_id else (
+                        f"@jenin - Please manually disburse ${amount_dollars:.2f} "
+                        f"from `{org_slug}` to `{self.settings.hcb_fulfillment_org_slug}` on HCB."
+                    )
+                }
+            }
+        ]
+
+        try:
+            await self._run_sync(
+                self.client.chat_postMessage,
+                channel=self.notification_channel,
+                blocks=blocks,
+                text=f"🚨 Disbursement failed for {event_name} - ${amount_dollars:.2f} needs manual transfer"
+            )
+            logger.info(f"Disbursement failure notification sent for {event_name}")
+        except SlackApiError as e:
+            logger.error(f"Failed to send disbursement failure notification: {e}")
+
+    async def send_disbursement_notification(
+        self,
+        event_name: str,
+        org_slug: str,
+        letter_count: int,
+        amount_cents: int,
+        hcb_transfer_id: str | None,
+        idempotency_key: str
+    ) -> None:
+        """Sends a notification when an HCB disbursement is created."""
+        amount_usd = cents_to_usd(amount_cents)
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "💰 HCB Disbursement Created",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Event:* {event_name}\n*Org:* `{org_slug}`\n*Letters:* {letter_count}\n*Amount:* ${amount_usd:.2f}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*HCB Transfer ID:* `{hcb_transfer_id or 'N/A'}`\n*Idempotency Key:* `{idempotency_key}`"
+                }
+            }
+        ]
+
+        try:
+            await self._run_sync(
+                self.client.chat_postMessage,
+                channel=self.notification_channel,
+                blocks=blocks,
+                text=f"Disbursement created: {event_name} - ${amount_usd:.2f}"
+            )
+            logger.info(f"Disbursement notification sent for {event_name}: ${amount_usd:.2f}")
+        except SlackApiError as e:
+            logger.error(f"Failed to send disbursement notification: {e}")
+
     async def send_parcel_quote_request(
         self,
         event_name: str,
