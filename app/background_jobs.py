@@ -123,8 +123,8 @@ async def process_billing_disbursements() -> dict:
     Returns:
         Dict with events_processed, letters_billed, and total_amount_cents
     """
-    if not settings.hcb_api_key:
-        logger.warning("HCB API key not configured - skipping billing disbursements")
+    if not settings.hcb_client_id or not settings.hcb_client_secret:
+        logger.warning("HCB OAuth credentials not configured - skipping billing disbursements")
         return {"events_processed": 0, "letters_billed": 0, "total_amount_cents": 0, "skipped": True}
 
     logger.info("Starting hourly billing disbursement processing")

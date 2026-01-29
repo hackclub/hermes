@@ -21,12 +21,55 @@ class HCBClient:
     def __init__(self):
         self.settings = get_settings()
         self.base_url = self.settings.hcb_base_url.rstrip("/")
-        self.api_key = self.settings.hcb_api_key
+        self._access_token: str | None = None
 
-    def _get_headers(self) -> dict:
+    async def _get_access_token(self) -> str:
+        """
+        Get an access token using OAuth2 client credentials flow.
+        Caches the token for reuse.
+        """
+        if self._access_token:
+            return self._access_token
+
+        token_url = f"{self.base_url}/oauth/token"
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    token_url,
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": self.settings.hcb_client_id,
+                        "client_secret": self.settings.hcb_client_secret,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=30.0,
+                )
+
+                if response.status_code != 200:
+                    logger.error(f"HCB OAuth token request failed: {response.status_code} - {response.text}")
+                    raise HCBAPIError(
+                        f"Failed to obtain HCB access token: {response.status_code}",
+                        status_code=response.status_code,
+                    )
+
+                token_data = response.json()
+                self._access_token = token_data["access_token"]
+                logger.info("Successfully obtained HCB access token")
+                return self._access_token
+
+            except httpx.TimeoutException:
+                logger.error("HCB OAuth token request timed out")
+                raise HCBAPIError("HCB OAuth token request timeout")
+            except httpx.RequestError as e:
+                logger.error(f"HCB OAuth token request error: {e}")
+                raise HCBAPIError(f"Failed to connect to HCB OAuth: {str(e)}")
+
+    async def _get_headers(self) -> dict:
+        token = await self._get_access_token()
         return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+            "Authorization": f"Bearer {token}",
         }
 
     async def get_organization(self, org_slug_or_id: str) -> dict[str, Any]:
@@ -36,11 +79,12 @@ class HCBClient:
         """
         url = f"{self.base_url}/organizations/{org_slug_or_id}"
 
+        headers = await self._get_headers()
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
                     url,
-                    headers=self._get_headers(),
+                    headers=headers,
                     timeout=30.0
                 )
 
@@ -95,11 +139,12 @@ class HCBClient:
 
         logger.info(f"Creating HCB disbursement: {source_org_slug} -> {destination_org_slug}, ${amount_cents/100:.2f}")
 
+        headers = await self._get_headers()
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
                     url,
-                    headers=self._get_headers(),
+                    headers=headers,
                     json=payload,
                     timeout=30.0
                 )
@@ -149,11 +194,12 @@ class HCBClient:
         """
         url = f"{self.base_url}/organizations/{org_slug}/transfers"
 
+        headers = await self._get_headers()
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
                     url,
-                    headers=self._get_headers(),
+                    headers=headers,
                     params={"per_page": limit},
                     timeout=30.0
                 )
