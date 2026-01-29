@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
@@ -144,7 +145,6 @@ async def process_billing_disbursements() -> dict:
         unbilled_letters = letter_result.all()
 
         # Group letters by event_id with their IDs and costs
-        from collections import defaultdict
         event_letter_map: dict[int, list[int]] = defaultdict(list)
         event_cost_map: dict[int, int] = defaultdict(int)
         for letter_id, event_id, cost_cents in unbilled_letters:
