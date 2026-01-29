@@ -3,10 +3,10 @@
 CLI script to create an API key for an event.
 
 Usage:
-    python scripts/create_api_key.py --event-name "Haxmas 2024" --queue-name "haxmas-2024-letters"
+    python scripts/create_api_key.py --org-slug "hackclub" --event-name "Haxmas 2024" --queue-name "haxmas-2024-letters"
 
 Or with explicit database URL:
-    python scripts/create_api_key.py --database-url "postgresql://..." --event-name "Haxmas 2024" --queue-name "haxmas-2024-letters"
+    python scripts/create_api_key.py --database-url "postgresql://..." --org-slug "hackclub" --event-name "Haxmas 2024" --queue-name "haxmas-2024-letters"
 """
 
 import argparse
@@ -24,7 +24,7 @@ from app.models import Event
 from app.security import generate_api_key, hash_api_key
 
 
-async def create_event(database_url: str, event_name: str, queue_name: str) -> tuple[int, str]:
+async def create_event(database_url: str, org_slug: str, event_name: str, queue_name: str) -> tuple[int, str]:
     """Create an event with a new API key."""
     engine = create_async_engine(database_url, echo=False)
 
@@ -39,6 +39,7 @@ async def create_event(database_url: str, event_name: str, queue_name: str) -> t
     async with async_session() as session:
         event = Event(
             name=event_name,
+            org_slug=org_slug,
             api_key_hash=api_key_hash,
             theseus_queue=queue_name,
             balance_due_cents=0,
@@ -58,6 +59,11 @@ def main():
         "--database-url",
         help="PostgreSQL database URL (or set DATABASE_URL env var)",
         default=os.environ.get("DATABASE_URL")
+    )
+    parser.add_argument(
+        "--org-slug",
+        required=True,
+        help="Organization slug (e.g., 'hackclub')"
     )
     parser.add_argument(
         "--event-name",
@@ -82,11 +88,12 @@ def main():
 
     try:
         event_id, api_key = asyncio.run(
-            create_event(database_url, args.event_name, args.queue_name)
+            create_event(database_url, args.org_slug, args.event_name, args.queue_name)
         )
 
         print("\n✅ API Key Created")
         print(f"Event ID: {event_id}")
+        print(f"Org: {args.org_slug}")
         print(f"Event: {args.event_name}")
         print(f"Queue: {args.queue_name}")
         print(f"API Key: {api_key}")
