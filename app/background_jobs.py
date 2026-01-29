@@ -102,6 +102,114 @@ async def check_all_pending_letters() -> dict:
     return {"checked": checked, "updated": updated, "mailed": mailed}
 
 
+async def bill_letter_immediately(letter_id: int, event_id: int, cost_cents: int, event_name: str, org_slug: str) -> dict:
+    """
+    Bills a single letter immediately after creation.
+
+    Args:
+        letter_id: The ID of the letter to bill
+        event_id: The event ID
+        cost_cents: The cost in cents
+        event_name: Name of the event (for logging/notifications)
+        org_slug: The HCB organization slug to bill
+
+    Returns:
+        Dict with success status and details
+    """
+    if not settings.hcb_access_token:
+        logger.warning("HCB access token not configured - skipping immediate billing")
+        return {"success": False, "skipped": True, "reason": "HCB not configured"}
+
+    if not org_slug:
+        logger.warning(f"Cannot bill letter {letter_id}: org_slug is empty")
+        return {"success": False, "reason": "Missing org_slug"}
+
+    idempotency_key = str(uuid.uuid4())
+    memo = f"Hermes // 1 Letter // ref:{idempotency_key}"
+
+    async with AsyncSessionLocal() as session:
+        try:
+            disbursement_record = Disbursement(
+                idempotency_key=idempotency_key,
+                event_id=event_id,
+                amount_cents=cost_cents,
+                letter_count=1,
+                status=DisbursementStatus.SENDING,
+                hcb_memo=memo,
+                last_attempt_at=datetime.utcnow()
+            )
+            session.add(disbursement_record)
+            await session.commit()
+
+            logger.info(f"Billing letter {letter_id} immediately: ${cost_cents/100:.2f} from {org_slug}")
+
+            hcb_response = await hcb_client.create_disbursement(
+                source_org_slug=org_slug,
+                destination_org_slug=settings.hcb_fulfillment_org_slug,
+                amount_cents=cost_cents,
+                name=memo
+            )
+
+            disbursement_record.status = DisbursementStatus.COMPLETED
+            disbursement_record.hcb_transfer_id = hcb_response.get("id")
+            disbursement_record.completed_at = datetime.utcnow()
+
+            update_stmt = (
+                Letter.__table__.update()
+                .where(Letter.id == letter_id)
+                .values(billing_paid=True)
+            )
+            await session.execute(update_stmt)
+            await session.commit()
+
+            logger.info(f"Immediate billing completed for letter {letter_id}: {hcb_response.get('id')}")
+
+            await slack_bot.send_disbursement_notification(
+                event_name=event_name,
+                org_slug=org_slug,
+                letter_count=1,
+                amount_cents=cost_cents,
+                hcb_transfer_id=hcb_response.get("id"),
+                idempotency_key=idempotency_key
+            )
+
+            return {"success": True, "hcb_transfer_id": hcb_response.get("id")}
+
+        except HCBAPIError as e:
+            logger.error(f"HCB API failed for immediate billing of letter {letter_id}: {e.message}")
+            disbursement_record.status = DisbursementStatus.FAILED
+            disbursement_record.error_message = e.message
+            await session.commit()
+
+            await slack_bot.send_disbursement_failure_notification(
+                event_name=event_name,
+                org_slug=org_slug,
+                letter_count=1,
+                amount_cents=cost_cents,
+                error_message=e.message,
+                idempotency_key=idempotency_key
+            )
+
+            return {"success": False, "error": e.message}
+
+        except Exception as e:
+            logger.error(f"Unexpected error in immediate billing for letter {letter_id}: {e}")
+            disbursement_record.status = DisbursementStatus.FAILED
+            disbursement_record.error_message = str(e)
+            await session.commit()
+
+            await slack_bot.send_disbursement_failure_notification(
+                event_name=event_name,
+                org_slug=org_slug,
+                letter_count=1,
+                amount_cents=cost_cents,
+                error_message=str(e),
+                idempotency_key=idempotency_key
+            )
+
+            return {"success": False, "error": str(e)}
+
+
 async def process_billing_disbursements() -> dict:
     """
     Processes billing for all events with unbilled letters.

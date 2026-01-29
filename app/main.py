@@ -19,7 +19,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.airtable_client import airtable_client
-from app.background_jobs import check_all_pending_letters, start_scheduler, stop_scheduler
+from app.background_jobs import bill_letter_immediately, check_all_pending_letters, start_scheduler, stop_scheduler
 from app.config import get_settings
 from app.cost_calculator import (
     CostCalculationError,
@@ -371,6 +371,17 @@ async def create_letter(
         logger.error(f"Failed to update financial canvas: {e}")
 
     await db.commit()
+
+    try:
+        await bill_letter_immediately(
+            letter_id=letter.id,
+            event_id=event.id,
+            cost_cents=cost_cents,
+            event_name=event.name,
+            org_slug=event.org_slug
+        )
+    except Exception as e:
+        logger.error(f"Failed to bill letter immediately: {e}")
 
     try:
         full_address = f"{request.first_name} {request.last_name}<br>{request.address_line_1}"
