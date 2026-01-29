@@ -110,10 +110,10 @@ async def process_billing_disbursements() -> dict:
     2. For each event with unbilled letters:
        - Generate unique idempotency key
        - Create Disbursement record with SENDING status
-       - Mark letters as billing_paid=True
        - Commit to DB
        - Create HCB disbursement from event's org to hermes-fulfillment
        - Update Disbursement to COMPLETED with HCB transfer ID
+       - Mark letters as billing_paid=True
        - Log to Slack
 
     If any disbursement fails, it is marked FAILED and a Slack notification is sent
@@ -192,24 +192,10 @@ async def process_billing_disbursements() -> dict:
                     last_attempt_at=datetime.utcnow()
                 )
                 session.add(disbursement_record)
-
-                # Step 3c: Mark letters as billing_paid=True BEFORE API call
-                # Use specific letter IDs captured earlier to avoid race condition
-                update_stmt = (
-                    Letter.__table__.update()
-                    .where(Letter.id.in_(letter_ids))
-                    .values(billing_paid=True)
-                )
-                await session.execute(update_stmt)
-
-                # Step 3d: Commit to DB - this is the critical point
-                # If this fails, nothing is charged (letters remain unbilled)
-                # If this succeeds, letters are marked paid and disbursement is tracked as SENDING
                 await session.commit()
 
                 logger.info(f"Persisted disbursement {idempotency_key} for {event_name}: {letter_count} letters, ${total_cost/100:.2f}")
 
-                # Step 4: Now make the HCB API call
                 hcb_response = await hcb_client.create_disbursement(
                     source_org_slug=org_slug,
                     destination_org_slug=settings.hcb_fulfillment_org_slug,
@@ -217,10 +203,16 @@ async def process_billing_disbursements() -> dict:
                     name=memo
                 )
 
-                # Step 5: Update disbursement record with success
                 disbursement_record.status = DisbursementStatus.COMPLETED
                 disbursement_record.hcb_transfer_id = hcb_response.get("id")
                 disbursement_record.completed_at = datetime.utcnow()
+
+                update_stmt = (
+                    Letter.__table__.update()
+                    .where(Letter.id.in_(letter_ids))
+                    .values(billing_paid=True)
+                )
+                await session.execute(update_stmt)
                 await session.commit()
 
                 logger.info(f"Disbursement completed for {event_name}: {hcb_response.get('id')}")
