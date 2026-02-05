@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     slack_notification_channel: str
     slack_canvas_id: str
     slack_jenin_user_id: str = ""
+    slack_tracking_url_template: str | None = None
 
     airtable_api_key: str = ""
 
