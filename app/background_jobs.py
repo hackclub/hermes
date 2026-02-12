@@ -210,6 +210,23 @@ async def bill_letter_immediately(letter_id: int, event_id: int, cost_cents: int
             return {"success": False, "error": str(e)}
 
 
+async def refresh_hcb_token() -> None:
+    """
+    Proactively refreshes the HCB access token every hour to prevent expiration.
+    """
+    if not settings.hcb_access_token:
+        logger.info("HCB access token not configured - skipping token refresh")
+        return
+
+    try:
+        await hcb_client._refresh_access_token()
+        logger.info("Proactive HCB token refresh completed successfully")
+    except HCBAPIError as e:
+        logger.error(f"Proactive HCB token refresh failed: {e.message}")
+    except Exception as e:
+        logger.error(f"Unexpected error during proactive HCB token refresh: {e}")
+
+
 async def process_billing_disbursements() -> dict:
     """
     Processes billing for all events with unbilled letters.
@@ -404,8 +421,15 @@ def start_scheduler():
         id='process_billing',
         replace_existing=True
     )
+    scheduler.add_job(
+        refresh_hcb_token,
+        'interval',
+        hours=1,
+        id='refresh_hcb_token',
+        replace_existing=True
+    )
     scheduler.start()
-    logger.info("Background scheduler started - checking letter status every hour, processing billing every 6 hours")
+    logger.info("Background scheduler started - checking letter status every hour, refreshing HCB token every hour, processing billing every 6 hours")
 
 
 def stop_scheduler():
