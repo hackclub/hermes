@@ -142,12 +142,12 @@ class SlackBot:
         message_ts: str,
         event_name: str,
         queue_name: str,
-        recipient_name: str | None = None,
         country: str,
         rubber_stamps_raw: str,
         cost_cents: int,
         letter_id: str,
-        mailed_at: datetime
+        mailed_at: datetime,
+        recipient_name: str | None = None
     ) -> None:
         """Updates the Slack message when a letter is shipped."""
         items_display = format_for_slack_display(rubber_stamps_raw)
