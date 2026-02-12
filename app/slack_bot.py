@@ -142,7 +142,7 @@ class SlackBot:
         message_ts: str,
         event_name: str,
         queue_name: str,
-        recipient_name: str,
+        recipient_name: str | None = None,
         country: str,
         rubber_stamps_raw: str,
         cost_cents: int,
@@ -170,7 +170,7 @@ class SlackBot:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Event:* {event_name} | *Queue:* {queue_name}\n*Recipient:* {recipient_name}, {country}"
+                    "text": f"*Event:* {event_name} | *Queue:* {queue_name}" + (f"\n*Recipient:* {recipient_name}, {country}" if recipient_name else f"\n*Destination:* {country}")
                 }
             },
             {
@@ -218,7 +218,7 @@ class SlackBot:
                 channel=channel_id,
                 ts=message_ts,
                 blocks=blocks,
-                text=f"Letter mailed to {recipient_name}"
+                text=f"Letter mailed" + (f" to {recipient_name}" if recipient_name else "")
             )
             logger.info(f"Slack message updated for shipped letter {letter_id}")
         except SlackApiError as e:

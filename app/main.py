@@ -2,7 +2,6 @@ import hashlib
 import hmac
 import html
 import logging
-import random
 import secrets
 import string
 import time
@@ -11,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -98,6 +98,14 @@ app = FastAPI(
     description="A wrapper API for Hack Club's Theseus mail system",
     version="1.0.0",
     lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://fulfillment.hackclub.com"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
 )
 
 app.state.limiter = limiter
@@ -307,15 +315,7 @@ async def create_letter(
     letter = Letter(
         letter_id=letter_id,
         event_id=event.id,
-        first_name=request.first_name,
-        last_name=request.last_name,
-        address_line_1=request.address_line_1,
-        address_line_2=request.address_line_2,
-        city=request.city,
-        state=request.state,
-        postal_code=request.postal_code,
         country=request.country,
-        recipient_email=request.recipient_email,
         mail_type=request.mail_type,
         weight_grams=request.weight_grams,
         rubber_stamps_raw=request.rubber_stamps,
@@ -518,9 +518,9 @@ async def calculate_shipping_cost(request: Request, body: CostCalculatorRequest)
 
 
 def generate_order_id() -> str:
-    """Generate a random 7-character alphanumeric order ID."""
+    """Generate a cryptographically secure random 7-character alphanumeric order ID."""
     chars = string.ascii_letters + string.digits
-    return ''.join(random.choices(chars, k=7))
+    return ''.join(secrets.choice(chars) for _ in range(7))
 
 
 def get_order_status_url(order_id: str) -> str:
@@ -537,7 +537,7 @@ def get_404_html(title: str = "Page Not Found", message: str = "The page you're 
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="color-scheme" content="dark">
-        <title>404 - {title}</title>
+        <title>404 - {html.escape(title)}</title>
         <link rel="stylesheet" href="https://css.hackclub.com/theme.css">
         <style>
             :root {{
@@ -585,8 +585,8 @@ def get_404_html(title: str = "Page Not Found", message: str = "The page you're 
             <p class="eyebrow">404</p>
             <div class="card sunken">
                 <div class="status-icon">🔍</div>
-                <h2>{title}</h2>
-                <p class="caption">{message}</p>
+                <h2>{html.escape(title)}</h2>
+                <p class="caption">{html.escape(message)}</p>
             </div>
             <footer class="caption">Hermes Mail Service</footer>
         </main>
@@ -1029,7 +1029,7 @@ async def handle_slack_interactions(
                             message_ts=letter.slack_message_ts,
                             event_name=event.name,
                             queue_name=event.theseus_queue,
-                            recipient_name=f"{letter.first_name} {letter.last_name}",
+                            recipient_name=None,
                             country=letter.country,
                             rubber_stamps_raw=letter.rubber_stamps_raw,
                             cost_cents=letter.cost_cents,

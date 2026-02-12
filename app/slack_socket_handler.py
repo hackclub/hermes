@@ -63,7 +63,7 @@ async def handle_mark_mailed(ack, body, action):
                 message_ts=letter.slack_message_ts,
                 event_name=event.name,
                 queue_name=event.theseus_queue,
-                recipient_name=f"{letter.first_name} {letter.last_name}",
+                recipient_name=None,
                 country=letter.country,
                 rubber_stamps_raw=letter.rubber_stamps_raw,
                 cost_cents=letter.cost_cents,

@@ -60,15 +60,9 @@ class Letter(Base):
     slack_message_ts = Column(String(255), nullable=True)
     slack_channel_id = Column(String(255), nullable=True)
 
-    first_name = Column(String(255), nullable=False)
-    last_name = Column(String(255), nullable=False)
-    address_line_1 = Column(String(255), nullable=False)
-    address_line_2 = Column(String(255), nullable=True)
-    city = Column(String(255), nullable=False)
-    state = Column(String(255), nullable=False)
-    postal_code = Column(String(255), nullable=False)
+    # NOTE: PII (name, address, email) is sent to Theseus/Slack at creation time and NOT stored in database
+
     country = Column(String(255), nullable=False)
-    recipient_email = Column(String(255), nullable=True)
 
     mail_type: "MailType" = Column(Enum(MailType), nullable=False)  # type: ignore[assignment]
     weight_grams = Column(Integer, nullable=True)
