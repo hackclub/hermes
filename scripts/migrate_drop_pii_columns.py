@@ -28,16 +28,25 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-PII_COLUMNS = [
-    "first_name",
-    "last_name",
-    "address_line_1",
-    "address_line_2",
-    "city",
-    "state",
-    "zip",
-    "email",
-]
+# Columns that the SQLAlchemy model defines (keep these)
+MODEL_COLUMNS = {
+    "id",
+    "letter_id",
+    "event_id",
+    "slack_message_ts",
+    "slack_channel_id",
+    "country",
+    "mail_type",
+    "weight_grams",
+    "rubber_stamps_raw",
+    "rubber_stamps_formatted",
+    "notes",
+    "cost_cents",
+    "billing_paid",
+    "status",
+    "created_at",
+    "mailed_at",
+}
 
 
 async def drop_pii_columns(database_url: str, dry_run: bool = False) -> None:
@@ -46,15 +55,15 @@ async def drop_pii_columns(database_url: str, dry_run: bool = False) -> None:
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        # Check which PII columns actually exist
+        # Discover ALL columns in the table, then drop any not in the model
         result = await session.execute(
             text(
                 "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'letters' AND column_name = ANY(:cols)"
+                "WHERE table_name = 'letters'"
             ),
-            {"cols": PII_COLUMNS},
         )
-        existing = [row[0] for row in result.fetchall()]
+        all_columns = {row[0] for row in result.fetchall()}
+        existing = sorted(all_columns - MODEL_COLUMNS)
 
         if not existing:
             print("\n✅ No PII columns found in letters table. Nothing to do.")
