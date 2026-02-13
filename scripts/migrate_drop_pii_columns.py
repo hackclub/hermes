@@ -31,8 +31,8 @@ from sqlalchemy.orm import sessionmaker
 PII_COLUMNS = [
     "first_name",
     "last_name",
-    "address_line1",
-    "address_line2",
+    "address_line_1",
+    "address_line_2",
     "city",
     "state",
     "zip",
