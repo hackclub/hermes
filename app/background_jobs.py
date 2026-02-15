@@ -53,11 +53,19 @@ async def check_all_pending_letters() -> dict:
 
             try:
                 theseus_response = await theseus_client.get_letter_status(letter.letter_id)
-                new_status_str = theseus_response.get("status", "").lower()
+                letter_data = theseus_response.get("letter", theseus_response)
+                new_status_str = letter_data.get("status", "").lower()
 
-                try:
-                    new_status = LetterStatus(new_status_str)
-                except ValueError:
+                THESEUS_STATUS_MAP = {
+                    "pending": LetterStatus.QUEUED,
+                    "queued": LetterStatus.QUEUED,
+                    "printed": LetterStatus.PROCESSING,
+                    "mailed": LetterStatus.SHIPPED,
+                    "received": LetterStatus.SHIPPED,
+                }
+
+                new_status = THESEUS_STATUS_MAP.get(new_status_str)
+                if new_status is None:
                     logger.warning(f"Unknown status '{new_status_str}' for letter {letter.letter_id}")
                     continue
 
